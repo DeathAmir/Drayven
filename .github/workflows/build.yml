@@ -20,11 +20,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Vendor open licensed assets into repository
+      - name: Vendor open licensed assets and source fixes
         shell: bash
         run: |
           set -euxo pipefail
           mkdir -p assets/vendor/{characters,enemies,items,ui,backgrounds,fonts,music,sfx} licenses
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('scripts/main.gd')
+          s=p.read_text()
+          s=s.replace('var unlocked := name in GameState.unlocked_characters', 'var unlocked: bool = name in GameState.unlocked_characters')
+          p.write_text(s)
+          PY
+          git rm -f assets/icon.svg assets/ui/logo.svg 2>/dev/null || true
           curl -fL --retry 4 -o assets/vendor/characters/topdown_man.png "https://opengameart.org/sites/default/files/sprite-sheet_0.png"
           curl -fL --retry 4 -o assets/vendor/items/chest.png "https://opengameart.org/sites/default/files/Chest_0.png"
           curl -fL --retry 4 -o assets/vendor/items/chest_open.png "https://opengameart.org/sites/default/files/Chest_open_0.png"
@@ -52,9 +60,9 @@ jobs:
           test -s assets/vendor/fonts/Vazirmatn-RD-Regular.ttf
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add assets/vendor licenses
+          git add scripts/main.gd assets/vendor licenses
           if ! git diff --cached --quiet; then
-            git commit -m "vendor CC0/OFL game assets [skip ci]"
+            git commit -m "finalize licensed assets and strict Godot source [skip ci]"
             git push origin HEAD:main
           fi
 
@@ -89,7 +97,7 @@ jobs:
       - name: Configure Godot Android editor settings
         shell: bash
         run: |
-          ./godot --headless --path . --editor --quit || true
+          ./godot --headless --path . --editor --quit >/tmp/godot-first-scan.log 2>&1 || true
           python3 - <<'PY'
           import os
           from pathlib import Path
@@ -127,13 +135,21 @@ jobs:
           echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$ALIAS" >> "$GITHUB_ENV"
           echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$PASS" >> "$GITHUB_ENV"
 
-      - name: Validate and export signed APK
+      - name: Strictly validate and export signed APK
         shell: bash
         run: |
           set -euxo pipefail
-          ./godot --headless --path . --editor --quit
+          ./godot --headless --path . --editor --quit 2>&1 | tee /tmp/godot-validate.log
+          if grep -E "SCRIPT ERROR:|Parse Error:|Failed to load script" /tmp/godot-validate.log; then
+            echo "Godot script validation failed"
+            exit 1
+          fi
           mkdir -p build/android
-          ./godot --headless --path . --export-release Android build/android/Drayven.apk
+          ./godot --headless --path . --export-release Android build/android/Drayven.apk 2>&1 | tee /tmp/godot-export.log
+          if grep -E "SCRIPT ERROR:|Parse Error:|Failed to load script" /tmp/godot-export.log; then
+            echo "Godot export contained script errors"
+            exit 1
+          fi
           APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)"
           "$APKSIGNER" verify --verbose build/android/Drayven.apk
 
@@ -150,5 +166,14 @@ jobs:
         run: |
           set -euxo pipefail
           TARGET="$(git rev-parse HEAD)"
-          gh release delete mobile-latest --cleanup-tag -y || true
-          gh release create mobile-latest build/android/Drayven.apk --target "$TARGET" --title "Drayven Mobile Latest" --notes "Godot 4.6.2 • Android arm64 • signed APK • CC0/OFL assets"
+          SUCCESS=0
+          for ATTEMPT in 1 2 3 4 5; do
+            gh release delete mobile-latest --cleanup-tag -y || true
+            sleep $((ATTEMPT * 2))
+            if gh release create mobile-latest build/android/Drayven.apk --target "$TARGET" --title "Drayven Mobile Latest" --notes "Godot 4.6.2 • Android arm64 • signed APK • real CC0/OFL assets • strict parser validation"; then
+              SUCCESS=1
+              break
+            fi
+            sleep $((ATTEMPT * 4))
+          done
+          test "$SUCCESS" = "1"
