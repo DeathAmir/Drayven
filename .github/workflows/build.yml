@@ -1,0 +1,204 @@
+name: Build Drayven
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Desktop (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: windows
+            preset: Windows Desktop
+            output: build/windows/Drayven.exe
+          - target: linux
+            preset: Linux/X11
+            output: build/linux/Drayven.x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y unzip osslsigncode openssl
+
+      - name: Install Godot 4.6.2 and templates
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -L -o godot.zip https://github.com/godotengine/godot/releases/download/4.6.2-stable/Godot_v4.6.2-stable_linux.x86_64.zip
+          unzip -q godot.zip
+          mv Godot_v4.6.2-stable_linux.x86_64 godot
+          chmod +x godot
+          curl -L -o templates.tpz https://github.com/godotengine/godot/releases/download/4.6.2-stable/Godot_v4.6.2-stable_export_templates.tpz
+          rm -rf /tmp/drayven_templates
+          mkdir -p /tmp/drayven_templates "$HOME/.local/share/godot/export_templates/4.6.2.stable"
+          unzip -q templates.tpz -d /tmp/drayven_templates
+          cp -a /tmp/drayven_templates/templates/. "$HOME/.local/share/godot/export_templates/4.6.2.stable/"
+          ./godot --version
+
+      - name: Validate project and scripts
+        run: ./godot --headless --path . --editor --quit
+
+      - name: Export release
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p "$(dirname '${{ matrix.output }}')"
+          ./godot --headless --path . --export-release "${{ matrix.preset }}" "${{ matrix.output }}"
+
+      - name: Sign Windows executable
+        if: matrix.target == 'windows'
+        shell: bash
+        env:
+          WINDOWS_PFX_B64: ${{ secrets.DRAYVEN_WINDOWS_PFX_B64 }}
+          WINDOWS_PFX_PASSWORD: ${{ secrets.DRAYVEN_WINDOWS_PFX_PASSWORD }}
+        run: |
+          set -euxo pipefail
+          if [ -n "${WINDOWS_PFX_B64:-}" ]; then
+            echo "$WINDOWS_PFX_B64" | base64 -d > /tmp/drayven.pfx
+            PASS="${WINDOWS_PFX_PASSWORD:-}"
+          else
+            cat >/tmp/codesign.cnf <<'CNF'
+          [ req ]
+          distinguished_name = dn
+          x509_extensions = ext
+          prompt = no
+          [ dn ]
+          CN = Drayven CI Self-Signed
+          O = DeathAmir
+          [ ext ]
+          keyUsage = critical,digitalSignature
+          extendedKeyUsage = codeSigning
+          basicConstraints = critical,CA:FALSE
+          CNF
+            openssl req -x509 -newkey rsa:3072 -keyout /tmp/drayven.key -out /tmp/drayven.crt -days 30 -nodes -config /tmp/codesign.cnf
+            PASS="DrayvenCI"
+            openssl pkcs12 -export -out /tmp/drayven.pfx -inkey /tmp/drayven.key -in /tmp/drayven.crt -password pass:$PASS
+          fi
+          osslsigncode sign -pkcs12 /tmp/drayven.pfx -pass "$PASS" -n "Drayven: Neon Requiem" -in build/windows/Drayven.exe -out build/windows/Drayven.signed.exe
+          mv build/windows/Drayven.signed.exe build/windows/Drayven.exe
+
+      - name: Package Linux
+        if: matrix.target == 'linux'
+        run: chmod +x build/linux/Drayven.x86_64 && tar -C build/linux -czf build/Drayven-linux-x86_64.tar.gz Drayven.x86_64
+
+      - name: Package Windows
+        if: matrix.target == 'windows'
+        run: cd build/windows && zip -9 ../Drayven-windows-x64.zip Drayven.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Drayven-${{ matrix.target }}
+          path: |
+            build/Drayven-${{ matrix.target == 'windows' && 'windows-x64.zip' || 'linux-x86_64.tar.gz' }}
+            ${{ matrix.output }}
+          if-no-files-found: error
+
+  android:
+    name: Android arm64 signed APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Godot 4.6.2 and templates
+        shell: bash
+        run: |
+          set -euxo pipefail
+          curl -L -o godot.zip https://github.com/godotengine/godot/releases/download/4.6.2-stable/Godot_v4.6.2-stable_linux.x86_64.zip
+          unzip -q godot.zip
+          mv Godot_v4.6.2-stable_linux.x86_64 godot
+          chmod +x godot
+          curl -L -o templates.tpz https://github.com/godotengine/godot/releases/download/4.6.2-stable/Godot_v4.6.2-stable_export_templates.tpz
+          rm -rf /tmp/drayven_templates
+          mkdir -p /tmp/drayven_templates "$HOME/.local/share/godot/export_templates/4.6.2.stable"
+          unzip -q templates.tpz -d /tmp/drayven_templates
+          cp -a /tmp/drayven_templates/templates/. "$HOME/.local/share/godot/export_templates/4.6.2.stable/"
+
+      - name: Ensure Android SDK requirements
+        shell: bash
+        run: |
+          set -euxo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "build-tools;35.0.1" "platforms;android-35"
+
+      - name: Configure Godot Android editor settings
+        shell: bash
+        run: |
+          set -euxo pipefail
+          ./godot --headless --path . --editor --quit || true
+          SETTINGS="$HOME/.config/godot/editor_settings-4.6.tres"
+          mkdir -p "$(dirname "$SETTINGS")"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path.home()/'.config/godot/editor_settings-4.6.tres'
+          sdk = os.environ.get('ANDROID_SDK_ROOT') or os.environ.get('ANDROID_HOME') or '/usr/local/lib/android/sdk'
+          java = os.environ['JAVA_HOME']
+          text = p.read_text() if p.exists() else '[gd_resource format=3]\n\n[resource]\n'
+          if '[resource]' not in text:
+              text += '\n[resource]\n'
+          lines = text.splitlines()
+          keys = {'export/android/android_sdk_path': sdk, 'export/android/java_sdk_path': java}
+          out=[]
+          seen=set()
+          for line in lines:
+              replaced=False
+              for k,v in keys.items():
+                  if line.startswith(k+' ='):
+                      out.append(f'{k} = "{v}"'); seen.add(k); replaced=True; break
+              if not replaced: out.append(line)
+          for k,v in keys.items():
+              if k not in seen: out.append(f'{k} = "{v}"')
+          p.write_text('\n'.join(out)+'\n')
+          PY
+
+      - name: Prepare Android signing
+        shell: bash
+        env:
+          KS_B64: ${{ secrets.DRAYVEN_ANDROID_KEYSTORE_B64 }}
+          KS_ALIAS: ${{ secrets.DRAYVEN_ANDROID_KEY_ALIAS }}
+          KS_PASS: ${{ secrets.DRAYVEN_ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euxo pipefail
+          if [ -n "${KS_B64:-}" ] && [ -n "${KS_ALIAS:-}" ] && [ -n "${KS_PASS:-}" ]; then
+            echo "$KS_B64" | base64 -d > /tmp/drayven-release.keystore
+            ALIAS="$KS_ALIAS"
+            PASS="$KS_PASS"
+          else
+            ALIAS="drayvenci"
+            PASS="DrayvenCI2026"
+            keytool -genkeypair -v -keystore /tmp/drayven-release.keystore -storepass "$PASS" -keypass "$PASS" -alias "$ALIAS" -keyalg RSA -keysize 3072 -validity 3650 -dname "CN=Drayven CI,O=DeathAmir,C=DE"
+          fi
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=/tmp/drayven-release.keystore" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$ALIAS" >> "$GITHUB_ENV"
+          echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$PASS" >> "$GITHUB_ENV"
+
+      - name: Validate project and scripts
+        run: ./godot --headless --path . --editor --quit
+
+      - name: Export signed Android APK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p build/android
+          ./godot --headless --path . --export-release "Android" build/android/Drayven.apk
+          "$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)" verify --verbose build/android/Drayven.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Drayven-android-arm64
+          path: build/android/Drayven.apk
+          if-no-files-found: error
