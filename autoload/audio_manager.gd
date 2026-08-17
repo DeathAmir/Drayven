@@ -38,13 +38,13 @@ func _process(delta: float) -> void:
 func _fill_buffer() -> void:
     if playback == null:
         return
-    var frames := playback.get_frames_available()
+    var frames: int = playback.get_frames_available()
     var notes: Array = BATTLE_NOTES if mode == "battle" else MENU_NOTES
-    var base: float = notes[step]
-    for i in range(frames):
+    var base: float = float(notes[step])
+    for _i in range(frames):
         phase = fmod(phase + base / sample_rate, 1.0)
-        var saw := (phase * 2.0 - 1.0) * 0.11
-        var sub := sin(phase * TAU * 0.5) * 0.07
-        var pulse := (0.04 if phase < 0.18 else -0.02)
-        var sample := clamp((saw + sub + pulse) * float(GameState.settings.get("music", 0.75)), -0.35, 0.35)
+        var saw: float = (phase * 2.0 - 1.0) * 0.11
+        var sub: float = sin(phase * TAU * 0.5) * 0.07
+        var pulse: float = 0.04 if phase < 0.18 else -0.02
+        var sample: float = clampf((saw + sub + pulse) * float(GameState.settings.get("music", 0.75)), -0.35, 0.35)
         playback.push_frame(Vector2(sample, sample))
