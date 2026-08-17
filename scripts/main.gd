@@ -128,7 +128,7 @@ func _show_loadout() -> void:
     var title:=_label("لوداوت",40); title.position=Vector2(950,55); title.size=Vector2(220,60); root.add_child(title)
     var y:=145.0
     for name in GameState.CHARACTERS.keys():
-        var unlocked := name in GameState.unlocked_characters
+        var unlocked: bool = name in GameState.unlocked_characters
         var c := _texture_button(("✓ " if GameState.selected_character==name else "") + str(GameState.CHARACTERS[name].fa) + ("" if unlocked else " — قفل"),Vector2(510,62)); c.position=Vector2(650,y); root.add_child(c)
         c.get_node("Button").disabled = not unlocked
         c.get_node("Button").pressed.connect(func(n=name): GameState.selected_character=n; GameState.save(); _show_loadout())
