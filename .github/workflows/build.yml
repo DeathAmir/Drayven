@@ -105,6 +105,9 @@ jobs:
   android:
     name: Android arm64 signed APK
     runs-on: ubuntu-latest
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
 
@@ -126,13 +129,24 @@ jobs:
           mkdir -p /tmp/drayven_templates "$HOME/.local/share/godot/export_templates/4.6.2.stable"
           unzip -q templates.tpz -d /tmp/drayven_templates
           cp -a /tmp/drayven_templates/templates/. "$HOME/.local/share/godot/export_templates/4.6.2.stable/"
+          ./godot --version
 
       - name: Ensure Android SDK requirements
         shell: bash
         run: |
           set -euxo pipefail
-          yes | sdkmanager --licenses >/dev/null || true
-          sdkmanager "platform-tools" "build-tools;35.0.1" "platforms;android-35"
+          SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -1)"
+          test -n "$SDKMANAGER"
+          chmod +x "$SDKMANAGER"
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" \
+            "platform-tools" \
+            "build-tools;35.0.1" \
+            "platforms;android-35" \
+            "cmdline-tools;latest" \
+            "cmake;3.10.2.4988404" \
+            "ndk;28.1.13356709"
+          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
 
       - name: Configure Godot Android editor settings
         shell: bash
@@ -145,7 +159,7 @@ jobs:
           import os
           from pathlib import Path
           p = Path.home()/'.config/godot/editor_settings-4.6.tres'
-          sdk = os.environ.get('ANDROID_SDK_ROOT') or os.environ.get('ANDROID_HOME') or '/usr/local/lib/android/sdk'
+          sdk = os.environ['ANDROID_SDK_ROOT']
           java = os.environ['JAVA_HOME']
           text = p.read_text() if p.exists() else '[gd_resource format=3]\n\n[resource]\n'
           if '[resource]' not in text:
@@ -159,9 +173,11 @@ jobs:
               for k,v in keys.items():
                   if line.startswith(k+' ='):
                       out.append(f'{k} = "{v}"'); seen.add(k); replaced=True; break
-              if not replaced: out.append(line)
+              if not replaced:
+                  out.append(line)
           for k,v in keys.items():
-              if k not in seen: out.append(f'{k} = "{v}"')
+              if k not in seen:
+                  out.append(f'{k} = "{v}"')
           p.write_text('\n'.join(out)+'\n')
           PY
 
@@ -195,7 +211,9 @@ jobs:
           set -euxo pipefail
           mkdir -p build/android
           ./godot --headless --path . --export-release "Android" build/android/Drayven.apk
-          "$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)" verify --verbose build/android/Drayven.apk
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          test -n "$APKSIGNER"
+          "$APKSIGNER" verify --verbose build/android/Drayven.apk
 
       - uses: actions/upload-artifact@v4
         with:
