@@ -1,15 +1,19 @@
-; Engine configuration file.
-; Drayven: Neon Requiem — Godot 4.6.2
+; Drayven Mobile — Godot 4.6.2
 config_version=5
 
 [application]
-config/name="Drayven: Neon Requiem"
+config/name="Drayven"
 run/main_scene="res://scenes/Main.tscn"
 config/features=PackedStringArray("4.6", "GL Compatibility")
-config/icon="res://assets/icon.svg"
+config/icon="res://assets/vendor/app_icon.png"
+boot_splash/image="res://assets/vendor/splash.png"
+boot_splash/fullsize=true
+boot_splash/use_filter=true
+boot_splash/bg_color=Color(0.015, 0.02, 0.06, 1)
 
 [autoload]
 GameState="*res://autoload/game_state.gd"
+LevelCatalog="*res://autoload/level_catalog.gd"
 AudioManager="*res://autoload/audio_manager.gd"
 
 [display]
@@ -18,6 +22,7 @@ window/size/viewport_height=720
 window/size/window_width_override=1280
 window/size/window_height_override=720
 window/stretch/mode="canvas_items"
+window/handheld/orientation=1
 
 [rendering]
 renderer/rendering_method="gl_compatibility"

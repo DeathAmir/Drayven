@@ -1,46 +1,43 @@
 extends Node
 
-const SAVE_PATH := "user://drayven_save.json"
+const SAVE_PATH := "user://drayven_save_v2.json"
+const SAVE_PEPPER := "DRAYVEN-MOBILE-2026-CTF-v2"
 
 var selected_character := "Vex"
-var unlocked_characters := ["Vex"]
-var unlocked_weapons := ["Pulse Pistol", "Arc SMG"]
+var unlocked_characters: Array = ["Vex"]
+var unlocked_weapons: Array = ["Pulse Pistol", "Arc SMG"]
 var shards := 0
 var best_score := 0
-var story_chapter := 1
-var settings := {"music": 0.75, "sfx": 0.85, "screen_shake": true}
+var highest_stage := 1
+var selected_stage := 1
+var completed_stages: Array = []
+var stage_best: Dictionary = {}
+var save_tampered := false
+var settings := {"music": 0.72, "sfx": 0.9, "shake": true}
 
 const CHARACTERS := {
-    "Vex": {"color": Color("58e6ff"), "accent": Color("aaf7ff"), "hp": 100.0, "speed": 300.0, "ability": "Phase Dash", "desc": "A recon runner who tears through bullets with a phase dash."},
-    "Iris": {"color": Color("c972ff"), "accent": Color("f1ceff"), "hp": 125.0, "speed": 255.0, "ability": "Aegis Pulse", "desc": "A tactical engineer who converts danger into a temporary shield."},
-    "Brakk": {"color": Color("ff7b4a"), "accent": Color("ffd0bd"), "hp": 165.0, "speed": 220.0, "ability": "Overdrive", "desc": "A heavy breach specialist who enters a brutal fire-rate overdrive."},
-    "Nyx": {"color": Color("8d7cff"), "accent": Color("d9d4ff"), "hp": 90.0, "speed": 330.0, "ability": "Void Blink", "desc": "A rogue anomaly who blinks through space and detonates a void wake."}
+    "Vex": {"hp":100.0, "speed":315.0, "ability":"Phase Dash", "fa":"وکس — جهش فازی"},
+    "Iris": {"hp":125.0, "speed":270.0, "ability":"Aegis Pulse", "fa":"آیریس — سپر پالسی"},
+    "Brakk": {"hp":165.0, "speed":235.0, "ability":"Overdrive", "fa":"براک — اوردرایو"},
+    "Nyx": {"hp":92.0, "speed":340.0, "ability":"Void Blink", "fa":"نیکس — پرش خلأ"}
 }
 
 const WEAPONS := {
-    "Pulse Pistol": {"damage": 24.0, "fire_rate": 3.4, "speed": 900.0, "spread": 0.01, "pellets": 1, "mag": 12, "reload": 1.0, "color": Color("63e8ff"), "recoil": 3.0},
-    "Arc SMG": {"damage": 10.0, "fire_rate": 11.0, "speed": 850.0, "spread": 0.11, "pellets": 1, "mag": 32, "reload": 1.25, "color": Color("7ef5bb"), "recoil": 1.8},
-    "Scattergun": {"damage": 11.0, "fire_rate": 1.15, "speed": 720.0, "spread": 0.34, "pellets": 7, "mag": 7, "reload": 1.7, "color": Color("ffb85c"), "recoil": 8.0},
-    "Rail Rifle": {"damage": 78.0, "fire_rate": 0.75, "speed": 1450.0, "spread": 0.002, "pellets": 1, "mag": 5, "reload": 2.0, "color": Color("ef7dff"), "recoil": 11.0},
-    "Nova Launcher": {"damage": 48.0, "fire_rate": 0.7, "speed": 520.0, "spread": 0.025, "pellets": 1, "mag": 4, "reload": 2.4, "color": Color("ff5f77"), "recoil": 14.0}
+    "Pulse Pistol": {"damage":24.0,"fire_rate":3.5,"speed":950.0,"spread":0.015,"pellets":1,"mag":14,"reload":0.9,"recoil":2.0,"fa":"تپانچه پالسی"},
+    "Arc SMG": {"damage":10.5,"fire_rate":11.5,"speed":880.0,"spread":0.10,"pellets":1,"mag":34,"reload":1.2,"recoil":1.4,"fa":"مسلسل آرک"},
+    "Scattergun": {"damage":11.5,"fire_rate":1.15,"speed":760.0,"spread":0.34,"pellets":7,"mag":7,"reload":1.65,"recoil":7.0,"fa":"شاتگان پراکنده"},
+    "Rail Rifle": {"damage":82.0,"fire_rate":0.78,"speed":1500.0,"spread":0.003,"pellets":1,"mag":5,"reload":1.9,"recoil":10.0,"fa":"رایفل ریلی"},
+    "Nova Launcher": {"damage":52.0,"fire_rate":0.72,"speed":560.0,"spread":0.02,"pellets":1,"mag":4,"reload":2.25,"recoil":13.0,"fa":"پرتابگر نُوا"}
 }
 
 func _ready() -> void:
     load_save()
 
-func add_shards(amount: int) -> void:
-    shards += amount
-    save()
-
-func unlock_weapon(name: String) -> void:
-    if name not in unlocked_weapons:
-        unlocked_weapons.append(name)
-        save()
-
-func unlock_character(name: String) -> void:
-    if name not in unlocked_characters:
-        unlocked_characters.append(name)
-        save()
+func _signature(payload: String) -> String:
+    var h := HashingContext.new()
+    h.start(HashingContext.HASH_SHA256)
+    h.update((SAVE_PEPPER + payload).to_utf8_buffer())
+    return h.finish().hex_encode()
 
 func save() -> void:
     var data := {
@@ -49,26 +46,74 @@ func save() -> void:
         "unlocked_weapons": unlocked_weapons,
         "shards": shards,
         "best_score": best_score,
-        "story_chapter": story_chapter,
+        "highest_stage": highest_stage,
+        "selected_stage": selected_stage,
+        "completed_stages": completed_stages,
+        "stage_best": stage_best,
         "settings": settings
     }
-    var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
-    if file:
-        file.store_string(JSON.stringify(data))
+    var payload := JSON.stringify(data)
+    var wrapper := {"payload": payload, "sha256": _signature(payload), "version": 2}
+    var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+    if f:
+        f.store_string(JSON.stringify(wrapper))
 
 func load_save() -> void:
     if not FileAccess.file_exists(SAVE_PATH):
         return
-    var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
-    if not file:
+    var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+    if not f:
         return
-    var data = JSON.parse_string(file.get_as_text())
+    var wrapper = JSON.parse_string(f.get_as_text())
+    if typeof(wrapper) != TYPE_DICTIONARY:
+        save_tampered = true
+        return
+    var payload := str(wrapper.get("payload", ""))
+    if payload.is_empty() or str(wrapper.get("sha256", "")) != _signature(payload):
+        save_tampered = true
+        return
+    var data = JSON.parse_string(payload)
     if typeof(data) != TYPE_DICTIONARY:
+        save_tampered = true
         return
-    selected_character = data.get("selected_character", selected_character)
+    selected_character = str(data.get("selected_character", selected_character))
+    if not CHARACTERS.has(selected_character): selected_character = "Vex"
     unlocked_characters = data.get("unlocked_characters", unlocked_characters)
     unlocked_weapons = data.get("unlocked_weapons", unlocked_weapons)
-    shards = int(data.get("shards", shards))
-    best_score = int(data.get("best_score", best_score))
-    story_chapter = int(data.get("story_chapter", story_chapter))
+    shards = clampi(int(data.get("shards", 0)), 0, 99999999)
+    best_score = clampi(int(data.get("best_score", 0)), 0, 999999999)
+    highest_stage = clampi(int(data.get("highest_stage", 1)), 1, 300)
+    selected_stage = clampi(int(data.get("selected_stage", highest_stage)), 1, highest_stage)
+    completed_stages = data.get("completed_stages", [])
+    stage_best = data.get("stage_best", {})
     settings = data.get("settings", settings)
+
+func add_shards(amount: int) -> void:
+    shards = clampi(shards + max(amount, 0), 0, 99999999)
+    save()
+
+func complete_stage(stage_id: int, score: int, reward: int) -> Dictionary:
+    stage_id = clampi(stage_id, 1, 300)
+    if stage_id not in completed_stages:
+        completed_stages.append(stage_id)
+    highest_stage = max(highest_stage, min(stage_id + 1, 300))
+    selected_stage = highest_stage
+    shards = clampi(shards + reward, 0, 99999999)
+    best_score = max(best_score, score)
+    var key := str(stage_id)
+    stage_best[key] = max(int(stage_best.get(key, 0)), score)
+    var unlocked: Array[String] = []
+    if stage_id >= 15 and "Scattergun" not in unlocked_weapons:
+        unlocked_weapons.append("Scattergun"); unlocked.append("Scattergun")
+    if stage_id >= 35 and "Iris" not in unlocked_characters:
+        unlocked_characters.append("Iris"); unlocked.append("Iris")
+    if stage_id >= 60 and "Rail Rifle" not in unlocked_weapons:
+        unlocked_weapons.append("Rail Rifle"); unlocked.append("Rail Rifle")
+    if stage_id >= 100 and "Brakk" not in unlocked_characters:
+        unlocked_characters.append("Brakk"); unlocked.append("Brakk")
+    if stage_id >= 150 and "Nova Launcher" not in unlocked_weapons:
+        unlocked_weapons.append("Nova Launcher"); unlocked.append("Nova Launcher")
+    if stage_id >= 220 and "Nyx" not in unlocked_characters:
+        unlocked_characters.append("Nyx"); unlocked.append("Nyx")
+    save()
+    return {"unlocked": unlocked, "shards": reward}

@@ -1,15 +1,13 @@
 # Third-party notices
 
-## Godot Engine 4.6.2
+Drayven does not claim ownership of third-party art, font, music, or sound files. See `ASSET_SOURCES.md` for the exact source page of every imported group of assets.
 
-Drayven is built with Godot Engine 4.6.2. Godot is distributed under the MIT License. See the official Godot license and copyright notices in the engine distribution.
+- Kenney art/UI assets: Creative Commons CC0 1.0.
+- Technopeasant / Piga Software top-down animated gunman: Creative Commons CC0 1.0.
+- brandav treasure chest: Creative Commons CC0 1.0.
+- KiluaBoy `Psycho Punch`: Creative Commons CC0 1.0.
+- frosty ham `Laser` and `Click`: Creative Commons CC0 1.0.
+- Vazirmatn font: SIL Open Font License 1.1.
+- Godot Engine 4.6.2: MIT License.
 
-## Music and sound
-
-No third-party music recordings, samples, or copyrighted commercial tracks are bundled with this repository.
-
-The game uses an original procedural synthesizer in `autoload/audio_manager.gd`. It generates the menu and battle score at runtime from original note sequences and primitive waveforms. This avoids external sample licensing and keeps the repository compact.
-
-## Art
-
-The committed logo and icon are original SVG assets created for Drayven. Character, enemy, projectile, pickup, and arena graphics are drawn procedurally at runtime by the game scripts. No third-party sprites are bundled.
+Full CC0, Vazirmatn OFL/authors, and Godot MIT texts are committed under `licenses/` by the Android build workflow before export. No commercial track or closed/proprietary game texture is bundled.

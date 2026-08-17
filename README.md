@@ -1,53 +1,36 @@
-# Drayven: Neon Requiem
+# Drayven Mobile
 
-A complete source-first 2D top-down story shooter built for **Godot 4.6.2**.
+Open-source 2D capture-the-flag shooter for **Godot 4.6.2**.
 
-## Game
+## Core game
 
-Noxara loses power in eleven seconds. Four operatives discover that the city's Drayven Core is not a reactor but a prison. Fight through four campaign chapters, recover fragments, unlock operatives and weapons, and confront the Core Titan.
+- 300 generated campaign stages across 12 story sectors (25 missions per sector).
+- Main loop: survive the enemy wave → hold position to capture every required flag → unlock the command chest → collect its reward → unlock the next stage.
+- Boss mission every 25 stages.
+- Four operatives: Vex, Iris, Brakk, Nyx; each has a distinct ability.
+- Five weapons: Pulse Pistol, Arc SMG, Scattergun, Rail Rifle, Nova Launcher.
+- Rare / Epic / Legendary reward chest tiers, persistent shards, unlocks, per-stage score and global best score.
+- Persian UI using Vazirmatn, native RTL layout, and a large `بازی` Play button.
+- Real touch UI: left virtual movement control plus textured fire, ability, reload and weapon controls. Right-side direct touch/drag aiming is also supported.
+- Custom splash and PNG application icon; default Godot branding is not used as the project splash.
+- Tamper-evident SHA-256 save wrapper plus range validation. This detects casual save edits; it is not represented as unbreakable client-side DRM.
 
-### Playable operatives
+## Real third-party assets
 
-- **Vex** — Phase Dash: short invulnerable dash through danger.
-- **Iris** — Aegis Pulse: temporary high-damage-reduction shield.
-- **Brakk** — Overdrive: movement and fire-rate burst.
-- **Nyx** — Void Blink: teleport to aim point and damage nearby enemies.
+Gameplay graphics are not procedurally drawn. The player walk/shoot sheet, enemy PNGs, flag, projectile, reward chest, backgrounds, application icon, textured buttons, touch controls, music, SFX and Persian font are downloaded from their original open-license sources and committed into `assets/vendor/` by CI. See `ASSET_SOURCES.md`, `THIRD_PARTY_NOTICES.md`, and `licenses/`.
 
-### Weapons
+## Android only
 
-Pulse Pistol, Arc SMG, Scattergun, Rail Rifle, and Nova Launcher. Weapons have distinct damage, spread, magazine, reload, projectile speed, recoil, and explosive behavior.
+The active export preset and GitHub Actions workflow build Android ARM64 only. CI uses Godot 4.6.2 and verifies the APK with `apksigner`.
 
-### Modes
+For production signing set:
 
-- **Story** — four chapters, progressive waves, unlock rewards and final boss.
-- **Neon Arena** — endless escalating survival with persistent best score.
+- `DRAYVEN_ANDROID_KEYSTORE_B64`
+- `DRAYVEN_ANDROID_KEY_ALIAS`
+- `DRAYVEN_ANDROID_KEY_PASSWORD`
 
-### Systems
+If they are absent, CI creates an ephemeral testing keystore, so the APK is still signed and installable for testing but does not have a stable production identity.
 
-Persistent save, shards, unlocks, character roster, weapon cycling, reloads, elite enemies, boss combat, health drops, reward drops, procedural soundtrack, keyboard/mouse controls, and touch controls.
+After a successful build the workflow publishes a stable GitHub Release asset at:
 
-## Controls
-
-Desktop: `WASD` move, mouse aim, left click fire, `Q` ability, `R` reload, `Z/X` weapon cycle.
-
-Mobile: drag on the left side to move, hold/drag on the right to aim and fire, and use the on-screen Weapon / Reload / Ability buttons.
-
-## Run
-
-Open the repository folder in Godot 4.6.2 and run the project.
-
-## Automated builds
-
-`.github/workflows/build.yml` downloads the official Godot 4.6.2 editor and matching export templates, validates the project, and exports Windows x64, Linux x86_64, and Android arm64 APK artifacts.
-
-### Android signing
-
-For stable release signing, set `DRAYVEN_ANDROID_KEYSTORE_B64`, `DRAYVEN_ANDROID_KEY_ALIAS`, and `DRAYVEN_ANDROID_KEY_PASSWORD`. Without them CI generates an ephemeral signed testing keystore.
-
-### Windows signing
-
-For a trusted signature, set `DRAYVEN_WINDOWS_PFX_B64` and `DRAYVEN_WINDOWS_PFX_PASSWORD`. Without them CI uses a self-signed code-signing certificate.
-
-## Licensing
-
-Project code and original committed assets are MIT licensed. See `LICENSE` and `THIRD_PARTY_NOTICES.md`.
+`https://github.com/DeathAmir/Drayven/releases/download/mobile-latest/Drayven.apk`

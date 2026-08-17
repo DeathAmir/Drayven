@@ -1,107 +1,14 @@
-name: Build Drayven
+name: Build Drayven Mobile
 
 on:
   push:
     branches: [main]
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  desktop:
-    name: Desktop (${{ matrix.target }})
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: windows
-            preset: Windows Desktop
-            output: build/windows/Drayven.exe
-          - target: linux
-            preset: Linux/X11
-            output: build/linux/Drayven.x86_64
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install tools
-        run: sudo apt-get update && sudo apt-get install -y unzip osslsigncode openssl
-
-      - name: Install Godot 4.6.2 and templates
-        shell: bash
-        run: |
-          set -euxo pipefail
-          curl -L -o godot.zip https://github.com/godotengine/godot/releases/download/4.6.2-stable/Godot_v4.6.2-stable_linux.x86_64.zip
-          unzip -q godot.zip
-          mv Godot_v4.6.2-stable_linux.x86_64 godot
-          chmod +x godot
-          curl -L -o templates.tpz https://github.com/godotengine/godot/releases/download/4.6.2-stable/Godot_v4.6.2-stable_export_templates.tpz
-          rm -rf /tmp/drayven_templates
-          mkdir -p /tmp/drayven_templates "$HOME/.local/share/godot/export_templates/4.6.2.stable"
-          unzip -q templates.tpz -d /tmp/drayven_templates
-          cp -a /tmp/drayven_templates/templates/. "$HOME/.local/share/godot/export_templates/4.6.2.stable/"
-          ./godot --version
-
-      - name: Validate project and scripts
-        run: ./godot --headless --path . --editor --quit
-
-      - name: Export release
-        shell: bash
-        run: |
-          set -euxo pipefail
-          mkdir -p "$(dirname '${{ matrix.output }}')"
-          ./godot --headless --path . --export-release "${{ matrix.preset }}" "${{ matrix.output }}"
-
-      - name: Sign Windows executable
-        if: matrix.target == 'windows'
-        shell: bash
-        env:
-          WINDOWS_PFX_B64: ${{ secrets.DRAYVEN_WINDOWS_PFX_B64 }}
-          WINDOWS_PFX_PASSWORD: ${{ secrets.DRAYVEN_WINDOWS_PFX_PASSWORD }}
-        run: |
-          set -euxo pipefail
-          if [ -n "${WINDOWS_PFX_B64:-}" ]; then
-            echo "$WINDOWS_PFX_B64" | base64 -d > /tmp/drayven.pfx
-            PASS="${WINDOWS_PFX_PASSWORD:-}"
-          else
-            cat >/tmp/codesign.cnf <<'CNF'
-          [ req ]
-          distinguished_name = dn
-          x509_extensions = ext
-          prompt = no
-          [ dn ]
-          CN = Drayven CI Self-Signed
-          O = DeathAmir
-          [ ext ]
-          keyUsage = critical,digitalSignature
-          extendedKeyUsage = codeSigning
-          basicConstraints = critical,CA:FALSE
-          CNF
-            openssl req -x509 -newkey rsa:3072 -keyout /tmp/drayven.key -out /tmp/drayven.crt -days 30 -nodes -config /tmp/codesign.cnf
-            PASS="DrayvenCI"
-            openssl pkcs12 -export -out /tmp/drayven.pfx -inkey /tmp/drayven.key -in /tmp/drayven.crt -password pass:$PASS
-          fi
-          osslsigncode sign -pkcs12 /tmp/drayven.pfx -pass "$PASS" -n "Drayven: Neon Requiem" -in build/windows/Drayven.exe -out build/windows/Drayven.signed.exe
-          mv build/windows/Drayven.signed.exe build/windows/Drayven.exe
-
-      - name: Package Linux
-        if: matrix.target == 'linux'
-        run: chmod +x build/linux/Drayven.x86_64 && tar -C build/linux -czf build/Drayven-linux-x86_64.tar.gz Drayven.x86_64
-
-      - name: Package Windows
-        if: matrix.target == 'windows'
-        run: cd build/windows && zip -9 ../Drayven-windows-x64.zip Drayven.exe
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: Drayven-${{ matrix.target }}
-          path: |
-            build/Drayven-${{ matrix.target == 'windows' && 'windows-x64.zip' || 'linux-x86_64.tar.gz' }}
-            ${{ matrix.output }}
-          if-no-files-found: error
-
   android:
     name: Android arm64 signed APK
     runs-on: ubuntu-latest
@@ -110,6 +17,46 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Vendor open licensed assets into repository
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p assets/vendor/{characters,enemies,items,ui,backgrounds,fonts,music,sfx} licenses
+          curl -fL --retry 4 -o assets/vendor/characters/topdown_man.png "https://opengameart.org/sites/default/files/sprite-sheet_0.png"
+          curl -fL --retry 4 -o assets/vendor/items/chest.png "https://opengameart.org/sites/default/files/Chest_0.png"
+          curl -fL --retry 4 -o assets/vendor/items/chest_open.png "https://opengameart.org/sites/default/files/Chest_open_0.png"
+          curl -fL --retry 4 -o assets/vendor/music/psycho_punch.ogg "https://opengameart.org/sites/default/files/Psycho%20Punch_1.ogg"
+          curl -fL --retry 4 -o assets/vendor/sfx/laser.wav "https://opengameart.org/sites/default/files/laserthing.wav"
+          curl -fL --retry 4 -o assets/vendor/sfx/click.wav "https://opengameart.org/sites/default/files/click_0.wav"
+          KBASE="https://raw.githubusercontent.com/iwenzhou/kenney/master/Art%20(5190%20files)"
+          curl -fL --retry 4 -o assets/vendor/backgrounds/darkPurple.png "$KBASE/Space%20shooter%20assets%20(300%20assets)/Backgrounds/darkPurple.png"
+          curl -fL --retry 4 -o assets/vendor/splash.png "$KBASE/Space%20shooter%20assets%20(300%20assets)/sample.png"
+          curl -fL --retry 4 -o assets/vendor/app_icon.png "$KBASE/Space%20shooter%20assets%20(300%20assets)/PNG/playerShip1_blue.png"
+          for spec in "enemyBlack1.png" "enemyBlue2.png" "enemyRed3.png" "enemyGreen4.png" "enemyRed5.png"; do curl -fL --retry 4 -o "assets/vendor/enemies/$spec" "$KBASE/Space%20shooter%20assets%20(300%20assets)/PNG/Enemies/$spec"; done
+          IBASE="$KBASE/Platformer%20assets%20(1330%20assets)/Base%20pack%20(360%20assets)/Items"
+          curl -fL --retry 4 -o assets/vendor/items/flagBlue.png "$IBASE/flagBlue.png"
+          curl -fL --retry 4 -o assets/vendor/items/fireball.png "$IBASE/fireball.png"
+          curl -fL --retry 4 -o assets/vendor/ui/buttonBlue.png "$IBASE/buttonBlue.png"
+          curl -fL --retry 4 -o assets/vendor/ui/buttonBlue_pressed.png "$IBASE/buttonBlue_pressed.png"
+          UBASE="$KBASE/Onscreen%20controls%20(400%20assets)/Sprites/flatDark"
+          for n in 00 06 07 08; do curl -fL --retry 4 -o "assets/vendor/ui/flatDark${n}.png" "$UBASE/flatDark${n}.png"; done
+          curl -fL --retry 4 -o assets/vendor/fonts/Vazirmatn-RD-Regular.ttf "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/Round-Dots/fonts/ttf/Vazirmatn-RD-Regular.ttf"
+          curl -fL --retry 4 -o licenses/OFL-1.1-Vazirmatn.txt "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/OFL.txt"
+          curl -fL --retry 4 -o licenses/Vazirmatn-AUTHORS.txt "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/AUTHORS.txt"
+          curl -fL --retry 4 -o licenses/CC0-1.0.txt "https://creativecommons.org/publicdomain/zero/1.0/legalcode.txt"
+          curl -fL --retry 4 -o licenses/GODOT-MIT.txt "https://raw.githubusercontent.com/godotengine/godot/4.6.2-stable/LICENSE.txt"
+          test -s assets/vendor/characters/topdown_man.png
+          test -s assets/vendor/fonts/Vazirmatn-RD-Regular.ttf
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add assets/vendor licenses
+          if ! git diff --cached --quiet; then
+            git commit -m "vendor CC0/OFL game assets [skip ci]"
+            git push origin HEAD:main
+          fi
 
       - uses: actions/setup-java@v4
         with:
@@ -125,7 +72,6 @@ jobs:
           mv Godot_v4.6.2-stable_linux.x86_64 godot
           chmod +x godot
           curl -L -o templates.tpz https://github.com/godotengine/godot/releases/download/4.6.2-stable/Godot_v4.6.2-stable_export_templates.tpz
-          rm -rf /tmp/drayven_templates
           mkdir -p /tmp/drayven_templates "$HOME/.local/share/godot/export_templates/4.6.2.stable"
           unzip -q templates.tpz -d /tmp/drayven_templates
           cp -a /tmp/drayven_templates/templates/. "$HOME/.local/share/godot/export_templates/4.6.2.stable/"
@@ -138,45 +84,28 @@ jobs:
           SDKMANAGER="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort -V | tail -1)"
           test -n "$SDKMANAGER"
           yes | "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" --licenses >/dev/null || true
-          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" \
-            "platform-tools" \
-            "build-tools;35.0.1" \
-            "platforms;android-35" \
-            "cmdline-tools;latest" \
-            "cmake;3.10.2.4988404" \
-            "ndk;28.1.13356709"
-          test -x "$ANDROID_SDK_ROOT/platform-tools/adb"
+          "$SDKMANAGER" --sdk_root="$ANDROID_SDK_ROOT" "platform-tools" "build-tools;35.0.1" "platforms;android-35" "cmdline-tools;latest" "cmake;3.10.2.4988404" "ndk;28.1.13356709"
 
       - name: Configure Godot Android editor settings
         shell: bash
         run: |
-          set -euxo pipefail
           ./godot --headless --path . --editor --quit || true
-          SETTINGS="$HOME/.config/godot/editor_settings-4.6.tres"
-          mkdir -p "$(dirname "$SETTINGS")"
           python3 - <<'PY'
           import os
           from pathlib import Path
-          p = Path.home()/'.config/godot/editor_settings-4.6.tres'
-          sdk = os.environ['ANDROID_SDK_ROOT']
-          java = os.environ['JAVA_HOME']
-          text = p.read_text() if p.exists() else '[gd_resource format=3]\n\n[resource]\n'
-          if '[resource]' not in text:
-              text += '\n[resource]\n'
-          lines = text.splitlines()
-          keys = {'export/android/android_sdk_path': sdk, 'export/android/java_sdk_path': java}
-          out=[]
-          seen=set()
+          p=Path.home()/'.config/godot/editor_settings-4.6.tres'
+          p.parent.mkdir(parents=True,exist_ok=True)
+          text=p.read_text() if p.exists() else '[gd_resource format=3]\n\n[resource]\n'
+          keys={'export/android/android_sdk_path':os.environ['ANDROID_SDK_ROOT'],'export/android/java_sdk_path':os.environ['JAVA_HOME']}
+          lines=text.splitlines(); out=[]; seen=set()
           for line in lines:
-              replaced=False
+              hit=False
               for k,v in keys.items():
                   if line.startswith(k+' ='):
-                      out.append(f'{k} = "{v}"'); seen.add(k); replaced=True; break
-              if not replaced:
-                  out.append(line)
+                      out.append(f'{k} = "{v}"'); seen.add(k); hit=True; break
+              if not hit: out.append(line)
           for k,v in keys.items():
-              if k not in seen:
-                  out.append(f'{k} = "{v}"')
+              if k not in seen: out.append(f'{k} = "{v}"')
           p.write_text('\n'.join(out)+'\n')
           PY
 
@@ -189,29 +118,23 @@ jobs:
         run: |
           set -euxo pipefail
           if [ -n "${KS_B64:-}" ] && [ -n "${KS_ALIAS:-}" ] && [ -n "${KS_PASS:-}" ]; then
-            echo "$KS_B64" | base64 -d > /tmp/drayven-release.keystore
-            ALIAS="$KS_ALIAS"
-            PASS="$KS_PASS"
+            echo "$KS_B64" | base64 -d > /tmp/drayven-release.keystore; ALIAS="$KS_ALIAS"; PASS="$KS_PASS"
           else
-            ALIAS="drayvenci"
-            PASS="DrayvenCI2026"
-            keytool -genkeypair -v -keystore /tmp/drayven-release.keystore -storepass "$PASS" -keypass "$PASS" -alias "$ALIAS" -keyalg RSA -keysize 3072 -validity 3650 -dname "CN=Drayven CI,O=DeathAmir,C=DE"
+            ALIAS="drayvenci"; PASS="DrayvenCI2026"
+            keytool -genkeypair -v -keystore /tmp/drayven-release.keystore -storepass "$PASS" -keypass "$PASS" -alias "$ALIAS" -keyalg RSA -keysize 3072 -validity 3650 -dname "CN=Drayven Mobile CI,O=DeathAmir,C=DE"
           fi
           echo "GODOT_ANDROID_KEYSTORE_RELEASE_PATH=/tmp/drayven-release.keystore" >> "$GITHUB_ENV"
           echo "GODOT_ANDROID_KEYSTORE_RELEASE_USER=$ALIAS" >> "$GITHUB_ENV"
           echo "GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD=$PASS" >> "$GITHUB_ENV"
 
-      - name: Validate project and scripts
-        run: ./godot --headless --path . --editor --quit
-
-      - name: Export signed Android APK
+      - name: Validate and export signed APK
         shell: bash
         run: |
           set -euxo pipefail
+          ./godot --headless --path . --editor --quit
           mkdir -p build/android
-          ./godot --headless --path . --export-release "Android" build/android/Drayven.apk
+          ./godot --headless --path . --export-release Android build/android/Drayven.apk
           APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)"
-          test -n "$APKSIGNER"
           "$APKSIGNER" verify --verbose build/android/Drayven.apk
 
       - uses: actions/upload-artifact@v4
@@ -219,3 +142,13 @@ jobs:
           name: Drayven-android-arm64
           path: build/android/Drayven.apk
           if-no-files-found: error
+
+      - name: Publish stable direct-download release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+          TARGET="$(git rev-parse HEAD)"
+          gh release delete mobile-latest --cleanup-tag -y || true
+          gh release create mobile-latest build/android/Drayven.apk --target "$TARGET" --title "Drayven Mobile Latest" --notes "Godot 4.6.2 • Android arm64 • signed APK • CC0/OFL assets"

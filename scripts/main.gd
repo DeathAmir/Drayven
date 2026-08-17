@@ -2,436 +2,268 @@ extends Node2D
 
 const PlayerScene := preload("res://scenes/Player.tscn")
 const EnemyScene := preload("res://scenes/Enemy.tscn")
-const PickupScript := preload("res://scripts/pickup.gd")
+const BG := preload("res://assets/vendor/backgrounds/darkPurple.png")
+const FLAG := preload("res://assets/vendor/items/flagBlue.png")
+const CHEST := preload("res://assets/vendor/items/chest.png")
+const CHEST_OPEN := preload("res://assets/vendor/items/chest_open.png")
+const BTN_NORMAL := preload("res://assets/vendor/ui/buttonBlue.png")
+const BTN_PRESSED := preload("res://assets/vendor/ui/buttonBlue_pressed.png")
+const TOUCH_BASE := preload("res://assets/vendor/ui/flatDark00.png")
+const TOUCH_FIRE := preload("res://assets/vendor/ui/flatDark06.png")
+const TOUCH_ACTION := preload("res://assets/vendor/ui/flatDark07.png")
+const TOUCH_SMALL := preload("res://assets/vendor/ui/flatDark08.png")
+const FONT := preload("res://assets/vendor/fonts/Vazirmatn-RD-Regular.ttf")
 
-var rng := RandomNumberGenerator.new()
-var state := "menu"
-var mode := "story"
-var player
 var ui := CanvasLayer.new()
-var menu_root: Control
-var hud_root: Control
-var wave := 0
-var enemies_to_spawn := 0
+var world_ui := CanvasLayer.new()
+var state := "menu"
+var player
+var current_stage := 1
+var level: Dictionary
 var spawned := 0
 var spawn_timer := 0.0
-var chapter := 1
-var chapter_complete := false
-var run_score := 0
-var kills := 0
-var title_label: Label
+var flags_done := 0
+var flag_hold := 0.0
+var flag_sprite: Sprite2D
+var chest_sprite: Sprite2D
+var chest_active := false
+var stage_score := 0
 var objective_label: Label
+var stage_label: Label
 var hp_bar: ProgressBar
 var ability_bar: ProgressBar
 var ammo_label: Label
 var score_label: Label
 var shard_label: Label
-var banner_label: Label
-var mobile_hint: Label
+var selected_stage_label: Label
+var joystick_knob: TextureRect
+var joystick_origin := Vector2.ZERO
+var joystick_touch := -1
+var aim_touch := -1
+var boss_spawned := false
 
-const STORY := {
-    1: {"title":"CHAPTER I — BLACKOUT", "brief":"Noxara went dark in 11 seconds. Enter Sector 7 and recover the first Drayven fragment before the Null Choir reaches it.", "waves":3, "reward":"Scattergun"},
-    2: {"title":"CHAPTER II — THE GLASS VEIN", "brief":"The fragment is alive. Follow its signal through the flooded transit ring and destroy the Warden carrying its twin.", "waves":3, "reward":"Iris"},
-    3: {"title":"CHAPTER III — GHOST PROTOCOL", "brief":"A buried military AI has opened the city vaults. Survive the hunters, seize the rail core, and learn who started the blackout.", "waves":4, "reward":"Rail Rifle"},
-    4: {"title":"CHAPTER IV — NEON REQUIEM", "brief":"The Drayven Core is a prison, not a reactor. Reach the heart of Noxara and face the Core Titan before the entity inside wakes.", "waves":4, "reward":"Nyx"}
-}
+const FLAG_POSITIONS := [
+    Vector2(180,150), Vector2(1080,150), Vector2(180,550), Vector2(1080,550),
+    Vector2(640,125), Vector2(640,575), Vector2(325,350), Vector2(955,350)
+]
 
 func _ready() -> void:
-    rng.randomize()
     _setup_inputs()
+    add_child(world_ui)
     add_child(ui)
+    _build_background()
     _build_menu()
-    AudioManager.set_mode("menu")
-    queue_redraw()
+
+func _build_background() -> void:
+    var bg := TextureRect.new()
+    bg.texture = BG
+    bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+    bg.stretch_mode = TextureRect.STRETCH_TILE
+    bg.position = Vector2.ZERO
+    bg.size = Vector2(1280,720)
+    bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+    world_ui.add_child(bg)
 
 func _setup_inputs() -> void:
-    var keys := {
-        "move_left": KEY_A, "move_right": KEY_D, "move_up": KEY_W, "move_down": KEY_S,
-        "ability": KEY_Q, "reload": KEY_R, "interact": KEY_E, "next_weapon": KEY_X,
-        "prev_weapon": KEY_Z, "pause": KEY_ESCAPE
-    }
-    for action in keys.keys():
-        if not InputMap.has_action(action):
-            InputMap.add_action(action)
-        var ev := InputEventKey.new()
-        ev.physical_keycode = keys[action]
-        InputMap.action_add_event(action, ev)
-    if not InputMap.has_action("shoot"):
-        InputMap.add_action("shoot")
-    var mouse := InputEventMouseButton.new()
-    mouse.button_index = MOUSE_BUTTON_LEFT
-    InputMap.action_add_event("shoot", mouse)
+    var keys := {"move_left":KEY_A,"move_right":KEY_D,"move_up":KEY_W,"move_down":KEY_S,"ability":KEY_Q,"reload":KEY_R,"next_weapon":KEY_X}
+    for action in keys:
+        if not InputMap.has_action(action): InputMap.add_action(action)
+        var ev := InputEventKey.new(); ev.physical_keycode = keys[action]; InputMap.action_add_event(action, ev)
+    if not InputMap.has_action("shoot"): InputMap.add_action("shoot")
+    var mb := InputEventMouseButton.new(); mb.button_index = MOUSE_BUTTON_LEFT; InputMap.action_add_event("shoot", mb)
 
-func _process(delta: float) -> void:
-    if state != "playing":
-        return
-    shard_label.text = "SHARDS  %04d" % GameState.shards
-    if player:
-        run_score = player.score
-    if enemies_to_spawn > spawned:
-        spawn_timer -= delta
-        if spawn_timer <= 0.0:
-            _spawn_enemy()
-            spawned += 1
-            spawn_timer = maxf(0.22, 0.72 - chapter * 0.08 - wave * 0.04)
-    elif get_tree().get_nodes_in_group("enemies").is_empty() and not chapter_complete:
-        if mode == "arena":
-            _begin_wave()
-        elif wave >= int(STORY[chapter].waves):
-            _complete_chapter()
-        else:
-            _begin_wave()
-
-func _draw() -> void:
-    draw_rect(Rect2(0,0,1280,720), Color("050b12"))
-    for x in range(0, 1281, 64):
-        draw_line(Vector2(x,0), Vector2(x,720), Color(0.16,0.35,0.43,0.09), 1.0)
-    for y in range(0, 721, 64):
-        draw_line(Vector2(0,y), Vector2(1280,y), Color(0.16,0.35,0.43,0.09), 1.0)
-    draw_circle(Vector2(1080,120), 240.0, Color(0.29,0.13,0.52,0.09))
-    draw_circle(Vector2(180,620), 280.0, Color(0.06,0.62,0.72,0.07))
-    if state == "playing":
-        draw_rect(Rect2(24,46,1232,650), Color(0.02,0.04,0.07,0.18), false, 2.0)
-
-func _base_label(text: String, size: int = 20) -> Label:
-    var l := Label.new()
-    l.text = text
-    l.add_theme_font_size_override("font_size", size)
-    l.add_theme_color_override("font_color", Color("e8f9ff"))
+func _label(text: String, size: int = 22) -> Label:
+    var l := Label.new(); l.text = text; l.add_theme_font_override("font", FONT); l.add_theme_font_size_override("font_size", size)
+    l.add_theme_color_override("font_color", Color("f5fbff")); l.layout_direction = Control.LAYOUT_DIRECTION_RTL
+    l.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
     return l
 
-func _button(text: String) -> Button:
-    var b := Button.new()
-    b.text = text
-    b.custom_minimum_size = Vector2(310, 50)
-    b.add_theme_font_size_override("font_size", 18)
-    return b
+func _texture_button(text: String, size := Vector2(320,72)) -> Control:
+    var wrap := Control.new(); wrap.custom_minimum_size = size; wrap.size = size
+    var b := TextureButton.new(); b.texture_normal = BTN_NORMAL; b.texture_pressed = BTN_PRESSED; b.ignore_texture_size = true; b.stretch_mode = TextureButton.STRETCH_SCALE
+    b.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); b.name = "Button"; wrap.add_child(b)
+    var lab := _label(text, 24); lab.mouse_filter = Control.MOUSE_FILTER_IGNORE; lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; lab.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    lab.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); wrap.add_child(lab)
+    return wrap
 
 func _clear_ui() -> void:
-    for child in ui.get_children():
-        child.queue_free()
+    for c in ui.get_children(): c.queue_free()
 
 func _build_menu() -> void:
-    state = "menu"
-    _clear_ui()
-    AudioManager.set_mode("menu")
-    menu_root = Control.new()
-    menu_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-    ui.add_child(menu_root)
+    state = "menu"; _clear_game(); _clear_ui(); AudioManager.set_mode("menu")
+    var root := Control.new(); root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); root.layout_direction = Control.LAYOUT_DIRECTION_RTL; ui.add_child(root)
+    var title := _label("DRAYVEN // درایون", 54); title.position = Vector2(390,72); title.size = Vector2(800,80); root.add_child(title)
+    var sub := _label("شوتر دوبعدی داستانی • تصرف پرچم • صندوق جایزه • ۳۰۰ مرحله", 21); sub.position = Vector2(320,150); sub.size = Vector2(870,48); root.add_child(sub)
+    var status := _label("بالاترین مرحله: %d / 300     شارد: %d     رکورد: %d" % [GameState.highest_stage, GameState.shards, GameState.best_score], 20)
+    status.position = Vector2(300,205); status.size = Vector2(890,44); root.add_child(status)
+    var play := _texture_button("▶  بازی", Vector2(390,86)); play.position = Vector2(760,290); root.add_child(play); play.get_node("Button").pressed.connect(_show_stage_select)
+    var loadout := _texture_button("کاراکتر و سلاح", Vector2(390,72)); loadout.position = Vector2(760,392); root.add_child(loadout); loadout.get_node("Button").pressed.connect(_show_loadout)
+    var licenses := _texture_button("مجوزها و منابع", Vector2(390,72)); licenses.position = Vector2(760,480); root.add_child(licenses); licenses.get_node("Button").pressed.connect(_show_licenses)
+    var story := _label("شهر نوکسارا سقوط کرده؛ شبکه‌ی درایون با ۱۲ دژ و ۳۰۰ مأموریت کنترل شهر را گرفته. هر پرچم یک قفل امنیتی را می‌شکند. همه‌ی پرچم‌ها را تصرف کن، صندوق فرماندهی را باز کن و به قلب درایون برس.", 22)
+    story.position = Vector2(80,290); story.size = Vector2(590,250); story.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART; root.add_child(story)
+    if GameState.save_tampered:
+        var warn := _label("ذخیره قبلی معتبر نبود و بارگذاری نشد.", 16); warn.position = Vector2(80,610); warn.size = Vector2(600,35); root.add_child(warn)
 
-    var logo := TextureRect.new()
-    logo.texture = load("res://assets/ui/logo.svg")
-    logo.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-    logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-    logo.position = Vector2(190, 60)
-    logo.size = Vector2(900, 220)
-    menu_root.add_child(logo)
+func _show_stage_select() -> void:
+    _clear_ui(); current_stage = clampi(GameState.selected_stage,1,GameState.highest_stage)
+    var root := Control.new(); root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); root.layout_direction = Control.LAYOUT_DIRECTION_RTL; ui.add_child(root)
+    var title := _label("انتخاب مرحله", 42); title.position = Vector2(780,70); title.size=Vector2(390,60); root.add_child(title)
+    selected_stage_label = _label("", 27); selected_stage_label.position=Vector2(600,180); selected_stage_label.size=Vector2(570,160); selected_stage_label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART; root.add_child(selected_stage_label)
+    var prev := _texture_button("◀ قبلی",Vector2(220,65)); prev.position=Vector2(680,370); root.add_child(prev); prev.get_node("Button").pressed.connect(func(): _change_stage(-1))
+    var next := _texture_button("بعدی ▶",Vector2(220,65)); next.position=Vector2(930,370); root.add_child(next); next.get_node("Button").pressed.connect(func(): _change_stage(1))
+    var start := _texture_button("شروع مأموریت",Vector2(470,82)); start.position=Vector2(680,470); root.add_child(start); start.get_node("Button").pressed.connect(func(): _start_stage(current_stage))
+    var back := _texture_button("بازگشت",Vector2(260,60)); back.position=Vector2(80,600); root.add_child(back); back.get_node("Button").pressed.connect(_build_menu)
+    _refresh_stage_text()
 
-    var subtitle := _base_label("A STORY-DRIVEN 2D NEON SHOOTER", 16)
-    subtitle.position = Vector2(455, 250)
-    menu_root.add_child(subtitle)
+func _change_stage(delta: int) -> void:
+    current_stage = clampi(current_stage + delta, 1, GameState.highest_stage)
+    GameState.selected_stage = current_stage; GameState.save(); AudioManager.play_click(); _refresh_stage_text()
 
-    var box := VBoxContainer.new()
-    box.position = Vector2(485, 315)
-    box.add_theme_constant_override("separation", 12)
-    menu_root.add_child(box)
-    var story_btn := _button("CONTINUE STORY")
-    story_btn.pressed.connect(func(): _show_story_brief(GameState.story_chapter))
-    box.add_child(story_btn)
-    var arena_btn := _button("NEON ARENA")
-    arena_btn.pressed.connect(func(): _start_game("arena", 1))
-    box.add_child(arena_btn)
-    var roster_btn := _button("OPERATIVES & LOADOUT")
-    roster_btn.pressed.connect(_show_roster)
-    box.add_child(roster_btn)
-    var credits_btn := _button("CREDITS / LICENSES")
-    credits_btn.pressed.connect(_show_credits)
-    box.add_child(credits_btn)
+func _refresh_stage_text() -> void:
+    var d := LevelCatalog.get_level(current_stage)
+    selected_stage_label.text = "%s\nبخش %d: %s\nپرچم: %d  •  دشمن: %d  •  جایزه: %d شارد (%s)\n%s" % [d.title,d.sector,d.sector_name,d.flags,d.enemy_count,d.reward,d.reward_tier,d.story]
 
-    var meta := _base_label("BEST %07d     SHARDS %04d     CHAPTER %d/4" % [GameState.best_score, GameState.shards, GameState.story_chapter], 16)
-    meta.position = Vector2(449, 610)
-    menu_root.add_child(meta)
-    var controls := _base_label("WASD • Mouse aim/fire • Q ability • R reload • Wheel/Z/X weapons   |   Mobile: left drag + right hold", 14)
-    controls.position = Vector2(265, 670)
-    controls.modulate = Color(0.8,0.9,1,0.7)
-    menu_root.add_child(controls)
+func _show_loadout() -> void:
+    _clear_ui(); var root:=Control.new(); root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); root.layout_direction=Control.LAYOUT_DIRECTION_RTL; ui.add_child(root)
+    var title:=_label("لوداوت",40); title.position=Vector2(950,55); title.size=Vector2(220,60); root.add_child(title)
+    var y:=145.0
+    for name in GameState.CHARACTERS.keys():
+        var unlocked := name in GameState.unlocked_characters
+        var c := _texture_button(("✓ " if GameState.selected_character==name else "") + str(GameState.CHARACTERS[name].fa) + ("" if unlocked else " — قفل"),Vector2(510,62)); c.position=Vector2(650,y); root.add_child(c)
+        c.get_node("Button").disabled = not unlocked
+        c.get_node("Button").pressed.connect(func(n=name): GameState.selected_character=n; GameState.save(); _show_loadout())
+        y += 75.0
+    var weapons:=_label("سلاح‌های باز: " + "، ".join(GameState.unlocked_weapons),20); weapons.position=Vector2(80,175); weapons.size=Vector2(490,200); weapons.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART; root.add_child(weapons)
+    var back:=_texture_button("بازگشت",Vector2(260,60)); back.position=Vector2(80,600); root.add_child(back); back.get_node("Button").pressed.connect(_build_menu)
 
-func _show_story_brief(ch: int) -> void:
-    chapter = clampi(ch, 1, 4)
-    _clear_ui()
-    var root := Control.new()
-    root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-    ui.add_child(root)
-    var title := _base_label(STORY[chapter].title, 34)
-    title.position = Vector2(130, 125)
-    root.add_child(title)
-    var brief := _base_label(STORY[chapter].brief, 21)
-    brief.position = Vector2(130, 205)
-    brief.size = Vector2(1020, 150)
-    brief.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    root.add_child(brief)
-    var operative := _base_label("OPERATIVE: %s  —  %s" % [GameState.selected_character, GameState.CHARACTERS[GameState.selected_character].ability], 18)
-    operative.position = Vector2(130, 390)
-    root.add_child(operative)
-    var start := _button("DEPLOY")
-    start.position = Vector2(130, 500)
-    start.pressed.connect(func(): _start_game("story", chapter))
-    root.add_child(start)
-    var back := _button("BACK")
-    back.position = Vector2(475, 500)
-    back.pressed.connect(_build_menu)
-    root.add_child(back)
+func _show_licenses() -> void:
+    _clear_ui(); var root:=Control.new(); root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); root.layout_direction=Control.LAYOUT_DIRECTION_RTL; ui.add_child(root)
+    var title:=_label("مجوزها",40); title.position=Vector2(950,50); title.size=Vector2(220,60); root.add_child(title)
+    var body:=_label("گرافیک‌های Kenney: CC0 1.0\nکاراکتر Top Down Man With Gun: CC0 — 2021 Piga Software\nصندوق brandav: CC0\nموسیقی Psycho Punch از KiluaBoy: CC0\nافکت Laser و Click از frosty ham: CC0\nفونت Vazirmatn: SIL Open Font License 1.1\nGodot Engine: MIT\n\nمتن کامل مجوزها و URL دقیق هر فایل در پوشه licenses و ASSET_SOURCES.md موجود است.",20)
+    body.position=Vector2(180,150); body.size=Vector2(980,380); body.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART; root.add_child(body)
+    var back:=_texture_button("بازگشت",Vector2(260,60)); back.position=Vector2(80,600); root.add_child(back); back.get_node("Button").pressed.connect(_build_menu)
 
-func _show_roster() -> void:
-    _clear_ui()
-    var root := Control.new()
-    root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-    ui.add_child(root)
-    var title := _base_label("OPERATIVES", 34)
-    title.position = Vector2(90,60)
-    root.add_child(title)
-    var x := 90.0
-    for char_name in GameState.CHARACTERS.keys():
-        var data: Dictionary = GameState.CHARACTERS[char_name]
-        var card := VBoxContainer.new()
-        card.position = Vector2(x,145)
-        card.custom_minimum_size = Vector2(250,300)
-        root.add_child(card)
-        var n := _base_label(char_name, 28)
-        n.add_theme_color_override("font_color", data.color)
-        card.add_child(n)
-        var status := _base_label("UNLOCKED" if char_name in GameState.unlocked_characters else "LOCKED", 14)
-        card.add_child(status)
-        var ability := _base_label(str(data.ability), 17)
-        card.add_child(ability)
-        var desc := _base_label(str(data.desc), 14)
-        desc.custom_minimum_size = Vector2(230,100)
-        desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-        card.add_child(desc)
-        var select := _button("SELECT" if char_name in GameState.unlocked_characters else "LOCKED")
-        select.custom_minimum_size = Vector2(225,42)
-        select.disabled = char_name not in GameState.unlocked_characters
-        select.pressed.connect(func(name = char_name): GameState.selected_character = name; GameState.save(); _show_roster())
-        card.add_child(select)
-        x += 285.0
-    var weapons := _base_label("UNLOCKED: " + ", ".join(GameState.unlocked_weapons), 16)
-    weapons.position = Vector2(90,520)
-    weapons.size = Vector2(1080,70)
-    weapons.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    root.add_child(weapons)
-    var back := _button("BACK")
-    back.position = Vector2(90,625)
-    back.pressed.connect(_build_menu)
-    root.add_child(back)
-
-func _show_credits() -> void:
-    _clear_ui()
-    var root := Control.new()
-    root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-    ui.add_child(root)
-    var title := _base_label("CREDITS & LICENSES", 34)
-    title.position = Vector2(100,70)
-    root.add_child(title)
-    var body := _base_label("DRAYVEN: NEON REQUIEM\n\nGame design, code, vector art and procedural music system: original project assets.\nNo third-party samples are bundled. The procedural score is synthesized at runtime from original note patterns and waveforms.\nEngine: Godot Engine 4.6.2 (MIT License).\n\nProject source license: MIT unless a file states otherwise.\nSee LICENSE and THIRD_PARTY_NOTICES.md in the repository.", 18)
-    body.position = Vector2(100,150)
-    body.size = Vector2(1050,360)
-    body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    root.add_child(body)
-    var back := _button("BACK")
-    back.position = Vector2(100,610)
-    back.pressed.connect(_build_menu)
-    root.add_child(back)
-
-func _start_game(new_mode: String, start_chapter: int) -> void:
-    mode = new_mode
-    chapter = start_chapter
-    state = "playing"
-    chapter_complete = false
-    wave = 0
-    spawned = 0
-    enemies_to_spawn = 0
-    kills = 0
-    _clear_gameplay_nodes()
-    _clear_ui()
-    _build_hud()
-    player = PlayerScene.instantiate()
-    player.global_position = Vector2(640,380)
-    add_child(player)
-    player.health_changed.connect(_on_health)
-    player.ammo_changed.connect(_on_ammo)
-    player.score_changed.connect(_on_score)
-    player.ability_changed.connect(_on_ability)
-    player.died.connect(_on_player_died)
-    _on_health(player.hp, player.max_hp)
-    _on_ammo(player.ammo, int(GameState.WEAPONS[player.weapon_name].mag), player.weapon_name)
-    AudioManager.set_mode("battle")
-    _begin_wave()
+func _start_stage(stage_id: int) -> void:
+    state="playing"; current_stage=stage_id; level=LevelCatalog.get_level(stage_id); spawned=0; flags_done=0; flag_hold=0.0; chest_active=false; stage_score=0; boss_spawned=false
+    _clear_game(); _clear_ui(); _build_hud()
+    player=PlayerScene.instantiate(); player.global_position=Vector2(640,390); add_child(player)
+    player.health_changed.connect(func(v,m): hp_bar.max_value=m; hp_bar.value=v)
+    player.ammo_changed.connect(func(v,m,w): ammo_label.text="%s  %d/%d" % [GameState.WEAPONS[w].fa,v,m])
+    player.score_changed.connect(func(v): stage_score=v; score_label.text="امتیاز %07d" % v)
+    player.ability_changed.connect(func(v,m): ability_bar.max_value=m; ability_bar.value=v)
+    player.died.connect(_on_defeat)
+    _spawn_flag(); AudioManager.set_mode("battle")
 
 func _build_hud() -> void:
-    hud_root = Control.new()
-    hud_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-    hud_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-    ui.add_child(hud_root)
-    title_label = _base_label("DRAYVEN // %s" % ("STORY" if mode == "story" else "ARENA"), 17)
-    title_label.position = Vector2(32,14)
-    hud_root.add_child(title_label)
-    hp_bar = ProgressBar.new(); hp_bar.position = Vector2(32,650); hp_bar.size = Vector2(330,24); hp_bar.show_percentage = false
-    hud_root.add_child(hp_bar)
-    ability_bar = ProgressBar.new(); ability_bar.position = Vector2(32,680); ability_bar.size = Vector2(220,10); ability_bar.show_percentage = false
-    hud_root.add_child(ability_bar)
-    ammo_label = _base_label("", 20); ammo_label.position = Vector2(1000,650); ammo_label.size = Vector2(240,40); ammo_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-    hud_root.add_child(ammo_label)
-    score_label = _base_label("SCORE 0000000", 17); score_label.position = Vector2(1010,20)
-    hud_root.add_child(score_label)
-    shard_label = _base_label("SHARDS %04d" % GameState.shards, 15); shard_label.position = Vector2(1010,45)
-    hud_root.add_child(shard_label)
-    objective_label = _base_label("", 17); objective_label.position = Vector2(32,48); objective_label.size = Vector2(800,40)
-    hud_root.add_child(objective_label)
-    banner_label = _base_label("", 30); banner_label.position = Vector2(380,95); banner_label.size = Vector2(520,60); banner_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    hud_root.add_child(banner_label)
-    mobile_hint = _base_label("◉ LEFT DRAG: MOVE     ◉ RIGHT HOLD: AIM/FIRE", 12); mobile_hint.position = Vector2(465,690); mobile_hint.modulate = Color(0.8,0.9,1,0.45)
-    hud_root.add_child(mobile_hint)
-    var weapon_btn := Button.new(); weapon_btn.text = "WEAPON"; weapon_btn.position = Vector2(620,646); weapon_btn.size = Vector2(108,42); weapon_btn.pressed.connect(func(): if player: player.cycle_weapon(1))
-    hud_root.add_child(weapon_btn)
-    var reload_btn := Button.new(); reload_btn.text = "RELOAD"; reload_btn.position = Vector2(738,646); reload_btn.size = Vector2(108,42); reload_btn.pressed.connect(func(): if player: player.reload())
-    hud_root.add_child(reload_btn)
-    var ability_btn := Button.new(); ability_btn.text = "ABILITY"; ability_btn.position = Vector2(856,646); ability_btn.size = Vector2(118,42); ability_btn.pressed.connect(func(): if player: player.use_ability())
-    hud_root.add_child(ability_btn)
+    var root:=Control.new(); root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT); root.layout_direction=Control.LAYOUT_DIRECTION_RTL; ui.add_child(root)
+    stage_label=_label("مرحله %d / 300 — %s" % [current_stage,level.sector_name],19); stage_label.position=Vector2(850,15); stage_label.size=Vector2(390,35); root.add_child(stage_label)
+    objective_label=_label("",19); objective_label.position=Vector2(360,16); objective_label.size=Vector2(470,48); root.add_child(objective_label)
+    hp_bar=ProgressBar.new(); hp_bar.position=Vector2(28,620); hp_bar.size=Vector2(310,25); hp_bar.show_percentage=false; root.add_child(hp_bar)
+    ability_bar=ProgressBar.new(); ability_bar.position=Vector2(28,654); ability_bar.size=Vector2(220,12); ability_bar.show_percentage=false; root.add_child(ability_bar)
+    ammo_label=_label("",18); ammo_label.position=Vector2(940,610); ammo_label.size=Vector2(300,42); root.add_child(ammo_label)
+    score_label=_label("امتیاز 0000000",17); score_label.position=Vector2(980,55); score_label.size=Vector2(260,34); root.add_child(score_label)
+    shard_label=_label("شارد %d" % GameState.shards,16); shard_label.position=Vector2(980,88); shard_label.size=Vector2(260,30); root.add_child(shard_label)
+    _build_touch_controls(root); _update_objective()
 
-func _begin_wave() -> void:
-    wave += 1
-    spawned = 0
-    var base := 5 + wave * 3 + (chapter - 1) * 2
-    enemies_to_spawn = base if mode == "story" else 5 + wave * 4
-    if mode == "story" and chapter == 4 and wave == int(STORY[chapter].waves):
-        enemies_to_spawn = 1
-    spawn_timer = 0.3
-    objective_label.text = ("CHAPTER %d  //  WAVE %d/%d" % [chapter, wave, int(STORY[chapter].waves)]) if mode == "story" else ("ARENA WAVE %d" % wave)
-    _flash_banner("WAVE %02d" % wave)
+func _touch_button(texture: Texture2D, pos: Vector2, size: Vector2) -> TextureButton:
+    var b:=TextureButton.new(); b.texture_normal=texture; b.ignore_texture_size=true; b.stretch_mode=TextureButton.STRETCH_KEEP_ASPECT_CENTERED; b.position=pos; b.size=size; return b
 
-func _spawn_enemy() -> void:
-    var enemy = EnemyScene.instantiate()
-    var pos := _random_edge_position()
-    enemy.global_position = pos
-    add_child(enemy)
-    if mode == "story" and chapter == 4 and wave == int(STORY[chapter].waves):
-        enemy.setup("core_titan", 1.0, true, true)
-        _flash_banner("CORE TITAN")
-        return
-    var roll := rng.randf()
-    var kind := "drone"
-    if wave >= 2 and roll > 0.45: kind = "stalker"
-    if wave >= 3 and roll > 0.72: kind = "brute"
-    if chapter >= 2 and wave >= 3 and roll > 0.9: kind = "warden"
-    var elite := wave > 2 and rng.randf() < minf(0.08 + wave * 0.018, 0.28)
-    var difficulty := 1.0 + (chapter - 1) * 0.16 + (wave - 1) * 0.08
-    enemy.setup(kind, difficulty, elite, false)
-    enemy.killed.connect(_on_enemy_killed)
+func _build_touch_controls(root: Control) -> void:
+    var base:=TextureRect.new(); base.texture=TOUCH_BASE; base.expand_mode=TextureRect.EXPAND_IGNORE_SIZE; base.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED; base.position=Vector2(28,475); base.size=Vector2(145,145); base.modulate=Color(1,1,1,0.72); base.mouse_filter=Control.MOUSE_FILTER_IGNORE; root.add_child(base)
+    joystick_knob=TextureRect.new(); joystick_knob.texture=TOUCH_SMALL; joystick_knob.expand_mode=TextureRect.EXPAND_IGNORE_SIZE; joystick_knob.stretch_mode=TextureRect.STRETCH_KEEP_ASPECT_CENTERED; joystick_knob.position=Vector2(73,520); joystick_knob.size=Vector2(55,55); joystick_knob.mouse_filter=Control.MOUSE_FILTER_IGNORE; root.add_child(joystick_knob); joystick_origin=Vector2(100,547)
+    var fire:=_touch_button(TOUCH_FIRE,Vector2(1090,490),Vector2(145,145)); root.add_child(fire); fire.button_down.connect(func(): if player: player.set_touch_fire(true)); fire.button_up.connect(func(): if player: player.set_touch_fire(false))
+    var ability:=_touch_button(TOUCH_ACTION,Vector2(940,535),Vector2(105,105)); root.add_child(ability); ability.pressed.connect(func(): if player: player.use_ability())
+    var reload:=_touch_button(TOUCH_SMALL,Vector2(835,565),Vector2(82,82)); root.add_child(reload); reload.pressed.connect(func(): if player: player.reload())
+    var weapon:=_touch_button(TOUCH_SMALL,Vector2(740,565),Vector2(82,82)); root.add_child(weapon); weapon.pressed.connect(func(): if player: player.cycle_weapon(1))
 
-func _random_edge_position() -> Vector2:
-    var side := rng.randi_range(0,3)
-    match side:
-        0: return Vector2(rng.randf_range(40,1240), 80)
-        1: return Vector2(rng.randf_range(40,1240), 660)
-        2: return Vector2(50, rng.randf_range(90,650))
-        _: return Vector2(1230, rng.randf_range(90,650))
+func _input(event: InputEvent) -> void:
+    if state != "playing" or not player: return
+    if event is InputEventScreenTouch:
+        if event.pressed and event.position.x < 220 and event.position.y > 430 and joystick_touch == -1:
+            joystick_touch=event.index; _update_joystick(event.position); get_viewport().set_input_as_handled()
+        elif not event.pressed and event.index == joystick_touch:
+            joystick_touch=-1; player.set_touch_move(Vector2.ZERO); joystick_knob.position=Vector2(73,520); get_viewport().set_input_as_handled()
+    elif event is InputEventScreenDrag and event.index == joystick_touch:
+        _update_joystick(event.position); get_viewport().set_input_as_handled()
 
-func _on_enemy_killed(_points: int, pos: Vector2) -> void:
-    kills += 1
-    if rng.randf() < 0.28:
-        var pickup := PickupScript.new()
-        pickup.setup("shard", 1 if rng.randf() < 0.85 else 3)
-        pickup.global_position = pos
-        add_child(pickup)
-    elif rng.randf() < 0.10:
-        var med := PickupScript.new()
-        med.setup("heal", 22)
-        med.global_position = pos
-        add_child(med)
+func _update_joystick(p: Vector2) -> void:
+    var delta:=(p-joystick_origin).limit_length(58.0); player.set_touch_move(delta/58.0); joystick_knob.position=joystick_origin+delta-Vector2(27.5,27.5)
 
-func _complete_chapter() -> void:
-    chapter_complete = true
-    if not player:
-        return
-    player.can_control = false
-    var reward := str(STORY[chapter].reward)
-    if reward in GameState.CHARACTERS:
-        GameState.unlock_character(reward)
-    else:
-        GameState.unlock_weapon(reward)
-    GameState.add_shards(20 + chapter * 15)
-    if chapter < 4:
-        GameState.story_chapter = max(GameState.story_chapter, chapter + 1)
-    GameState.best_score = maxi(GameState.best_score, player.score)
-    GameState.save()
-    _show_result(true, "CHAPTER CLEAR", "Reward unlocked: %s" % reward)
+func _process(delta: float) -> void:
+    if state != "playing" or not is_instance_valid(player): return
+    shard_label.text="شارد %d" % GameState.shards
+    if spawned < int(level.enemy_count):
+        spawn_timer -= delta
+        if spawn_timer <= 0.0:
+            _spawn_enemy(false); spawned += 1; spawn_timer=float(level.spawn_delay)
+    elif bool(level.boss) and not boss_spawned:
+        _spawn_enemy(true)
+        boss_spawned = true
+    if flag_sprite and is_instance_valid(flag_sprite):
+        if player.global_position.distance_to(flag_sprite.global_position) < 62.0:
+            flag_hold += delta
+            objective_label.text="در حال تصرف... %d%%" % int(clampf(flag_hold/1.15,0,1)*100.0)
+            if flag_hold >= 1.15: _capture_flag()
+        else:
+            flag_hold=maxf(0.0,flag_hold-delta*2.5); _update_objective()
+    elif chest_active and chest_sprite and player.global_position.distance_to(chest_sprite.global_position) < 68.0:
+        _open_chest()
 
-func _on_player_died() -> void:
+func _spawn_flag() -> void:
+    if flag_sprite and is_instance_valid(flag_sprite): flag_sprite.queue_free()
+    flag_sprite=Sprite2D.new(); flag_sprite.texture=FLAG; flag_sprite.scale=Vector2(0.72,0.72)
+    var idx:=(current_stage*3+flags_done*2)%FLAG_POSITIONS.size(); flag_sprite.global_position=FLAG_POSITIONS[idx]; add_child(flag_sprite); flag_hold=0.0; _update_objective()
+
+func _capture_flag() -> void:
+    flags_done += 1; AudioManager.play_click(); flag_sprite.queue_free(); flag_sprite=null; flag_hold=0.0
+    if flags_done >= int(level.flags): _spawn_chest()
+    else: _spawn_flag()
+
+func _spawn_chest() -> void:
+    chest_active=true; chest_sprite=Sprite2D.new(); chest_sprite.texture=CHEST; chest_sprite.scale=Vector2(1.3,1.3); chest_sprite.global_position=Vector2(640,350); add_child(chest_sprite); objective_label.text="صندوق باز شد؛ به مرکز نقشه برو"
+
+func _open_chest() -> void:
+    if not chest_active: return
+    chest_active=false; chest_sprite.texture=CHEST_OPEN; AudioManager.play_click()
+    var reward_info:=GameState.complete_stage(current_stage,stage_score,int(level.reward)); _show_victory(reward_info)
+
+func _spawn_enemy(as_boss: bool) -> void:
+    var e=EnemyScene.instantiate(); var kinds=["drone","stalker","brute","warden"]; var kind="core_titan" if as_boss else kinds[(spawned+current_stage)%kinds.size()]
+    var elite:=not as_boss and randf() < float(level.elite_rate); e.setup(kind,float(level.difficulty),elite,as_boss)
+    if as_boss: e.add_to_group("stage_boss")
+    var edge:=randi()%4
+    match edge:
+        0: e.global_position=Vector2(randf_range(80,1200),90)
+        1: e.global_position=Vector2(randf_range(80,1200),630)
+        2: e.global_position=Vector2(70,randf_range(120,600))
+        _: e.global_position=Vector2(1210,randf_range(120,600))
+    add_child(e)
+
+func _update_objective() -> void:
+    if objective_label: objective_label.text="پرچم %d / %d — نزدیک پرچم بمان" % [flags_done+1,int(level.flags)]
+
+func _show_victory(info: Dictionary) -> void:
+    state = "victory"
     if player:
-        GameState.best_score = maxi(GameState.best_score, player.score)
-        GameState.save()
-    _show_result(false, "OPERATIVE DOWN", "The city remembers every failed run. Re-arm and return.")
+        player.can_control = false
+    var panel:=Control.new(); panel.position=Vector2(390,175); panel.size=Vector2(500,350); ui.add_child(panel)
+    var title:=_label("مأموریت کامل",40); title.size=Vector2(480,60); panel.add_child(title)
+    var txt:=_label("صندوق %s\n+%d شارد\nامتیاز: %d" % [level.reward_tier,info.shards,stage_score],23); txt.position=Vector2(0,75); txt.size=Vector2(480,110); panel.add_child(txt)
+    if not info.unlocked.is_empty(): txt.text += "\nباز شد: " + "، ".join(info.unlocked)
+    var next:=_texture_button("مرحله بعد",Vector2(280,65)); next.position=Vector2(200,235); panel.add_child(next); next.get_node("Button").pressed.connect(func(): _start_stage(min(current_stage+1,300)))
+    var menu:=_texture_button("منو",Vector2(170,60)); menu.position=Vector2(0,240); panel.add_child(menu); menu.get_node("Button").pressed.connect(_build_menu)
 
-func _show_result(victory: bool, heading: String, text: String) -> void:
-    state = "result"
-    AudioManager.set_mode("menu")
-    var panel := ColorRect.new()
-    panel.color = Color(0.015,0.025,0.04,0.94)
-    panel.position = Vector2(330,170)
-    panel.size = Vector2(620,380)
-    ui.add_child(panel)
-    var h := _base_label(heading, 36); h.position = Vector2(65,50); h.size = Vector2(490,50); h.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    panel.add_child(h)
-    var t := _base_label(text, 18); t.position = Vector2(65,120); t.size = Vector2(490,80); t.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART; t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    panel.add_child(t)
-    var stats := _base_label("SCORE %07d   •   KILLS %d   •   SHARDS %d" % [run_score, kills, GameState.shards], 16); stats.position = Vector2(65,210); stats.size = Vector2(490,40); stats.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    panel.add_child(stats)
-    var retry := _button("NEXT CHAPTER" if victory and chapter < 4 else "PLAY AGAIN")
-    retry.custom_minimum_size = Vector2(225,46); retry.position = Vector2(65,285)
-    retry.pressed.connect(func():
-        if victory and chapter < 4: _show_story_brief(chapter + 1)
-        else: _start_game(mode, chapter)
-    )
-    panel.add_child(retry)
-    var menu := _button("MAIN MENU"); menu.custom_minimum_size = Vector2(225,46); menu.position = Vector2(330,285); menu.pressed.connect(_return_to_menu)
-    panel.add_child(menu)
+func _on_defeat() -> void:
+    state="defeat"; var panel:=Control.new(); panel.position=Vector2(430,220); panel.size=Vector2(420,250); ui.add_child(panel)
+    var title:=_label("ماموریت شکست خورد",34); title.size=Vector2(410,60); panel.add_child(title)
+    var retry:=_texture_button("تلاش دوباره",Vector2(300,65)); retry.position=Vector2(110,100); panel.add_child(retry); retry.get_node("Button").pressed.connect(func(): _start_stage(current_stage))
+    var menu:=_texture_button("منو",Vector2(180,55)); menu.position=Vector2(110,180); panel.add_child(menu); menu.get_node("Button").pressed.connect(_build_menu)
 
-func _return_to_menu() -> void:
-    _clear_gameplay_nodes()
-    _build_menu()
-
-func _clear_gameplay_nodes() -> void:
-    for n in get_children():
-        if n == ui:
-            continue
-        if n.is_in_group("player") or n.is_in_group("enemies") or n is Area2D:
-            n.queue_free()
-    player = null
-
-func _flash_banner(text: String) -> void:
-    if not banner_label:
-        return
-    banner_label.text = text
-    banner_label.modulate = Color(1,1,1,1)
-    var tween := create_tween()
-    tween.tween_interval(0.7)
-    tween.tween_property(banner_label, "modulate:a", 0.0, 0.6)
-
-func _on_health(value: float, maximum: float) -> void:
-    if hp_bar:
-        hp_bar.max_value = maximum
-        hp_bar.value = value
-
-func _on_ammo(value: int, maximum: int, weapon: String) -> void:
-    if ammo_label:
-        ammo_label.text = "%s\n%02d / %02d" % [weapon.to_upper(), value, maximum]
-
-func _on_score(value: int) -> void:
-    run_score = value
-    if score_label:
-        score_label.text = "SCORE %07d" % value
-
-func _on_ability(value: float, maximum: float) -> void:
-    if ability_bar:
-        ability_bar.max_value = maximum
-        ability_bar.value = value
+func _clear_game() -> void:
+    for n in get_tree().get_nodes_in_group("enemies"):
+        if is_instance_valid(n): n.queue_free()
+    if is_instance_valid(player): player.queue_free()
+    player=null
+    if flag_sprite and is_instance_valid(flag_sprite): flag_sprite.queue_free()
+    if chest_sprite and is_instance_valid(chest_sprite): chest_sprite.queue_free()
+    flag_sprite=null; chest_sprite=null
